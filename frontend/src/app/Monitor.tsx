@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react"
 import { S2 } from "@s2-dev/streamstore"
 import { ReadAcceptEnum } from "@s2-dev/streamstore/funcs/streamRead"
 import { EventStream } from "@s2-dev/streamstore/lib/event-streams"
-import { ReadResponse1 } from "@s2-dev/streamstore/models/components/readresponse"
-import { Output1 } from "@s2-dev/streamstore/models/components/output"
+import { Batch, Output, ReadResponseOutput } from "@s2-dev/streamstore/models/components"
+// import { ReadResponse1 } from "@s2-dev/streamstore/models/components/readresponse"
+// import { Output1 } from "@s2-dev/streamstore/models/components/output"
 
 const basinUrl = "https://monitors.b.aws.s2.dev/v1alpha"
 const s2 = new S2({
@@ -27,38 +28,45 @@ export default function AMG8833() {
             try {
                 const tail = await s2.stream.checkTail(
                     { stream: "amg8833" },
-                    {
-                        serverURL: basinUrl,
-                    },
-                )
+                    { serverURL: basinUrl }
+                );
+
                 const result = await s2.stream.read(
-                    { stream: "amg8833", startSeqNum: tail.nextSeqNum },
+                    { stream: "amg8833", startSeqNum: tail.checkTailResponse!!.nextSeqNum },
                     {
                         serverURL: basinUrl,
                         acceptHeaderOverride: ReadAcceptEnum.textEventStream,
-                    },
-                )
-                if (result instanceof EventStream) {
-                    for await (const event of result) {
-                        if ((event as ReadResponse1).data) {
-                            const outputData = event.data
-                            if ((outputData as Output1).batch) {
-                                const records = (outputData as Output1).batch.records;
-                                for (const record of records) {                                    
-                                    const sensorData = JSON.parse(record.body) as SensorData;
-                                    setOccupied(sensorData.occupied)
-                                    setTemperatureGrid(sensorData.grid)                                    
-                                }
-                            }
+                    }
+                );
+
+                const stream = result.readResponse;
+                if (!(stream instanceof EventStream)) return;
+
+                for await (const event of stream) {
+                    const outputData = (event as ReadResponseOutput).data;
+                    if (!outputData) continue;
+
+                    const batch = outputData as Batch;
+                    if (!batch.batch?.records) continue;
+
+                    for (const record of batch.batch.records) {
+                        try {
+                            const sensorData = JSON.parse(record.body) as SensorData;
+                            setOccupied(sensorData.occupied);
+                            setTemperatureGrid(sensorData.grid);
+                        } catch (parseError) {
+                            console.error("Error parsing sensor data:", parseError);
                         }
                     }
                 }
             } catch (error) {
-                console.error("Error fetching stream:", error)
+                console.error("Error fetching stream:", error);
             }
-        }
-        fetchStream()
-    }, [])
+        };
+
+        fetchStream();
+    }, []);
+
 
     useEffect(() => {
         if (temperatureGrid.length > 0) {
